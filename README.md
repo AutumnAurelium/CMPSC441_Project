@@ -1,0 +1,3 @@
+I rewrote a lot of the code for this, copying applicable parts from the lab files when necessary, since there is a lot of code that is unnecessary for the final game and I want a cleaner enviroment.
+
+To avoid long load times in development, the visual environment can be loaded from one of many pregenerated worlds. If `pregenerator.py` is not run, it will default to generating a new world every time.
