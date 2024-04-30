@@ -12,12 +12,11 @@ def get_elevation(size):
         ]
     )
 
-    return elevation
+    return (elevation - elevation.min())/(elevation.max()-elevation.min())
 
 def elevation_to_rgba(elevation, cmap='gist_earth'):
     xpix, ypix = np.array(elevation).shape
     colormap = plt.cm.get_cmap(cmap)
-    elevation = (elevation - elevation.min())/(elevation.max()-elevation.min())
     ''' You can play around with colormap to get a landscape of your preference if you want '''
     landscape = np.array([colormap(elevation[i, j])[0:3] for i in range(xpix) for j in range(ypix)]).reshape(xpix, ypix, 3)*255
     landscape = landscape.astype('uint8')

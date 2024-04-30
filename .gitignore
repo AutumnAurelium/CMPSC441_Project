@@ -1,1 +1,3 @@
 pregen/**
+.venv/**
+__pycache__/**
