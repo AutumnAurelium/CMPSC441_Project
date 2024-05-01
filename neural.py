@@ -5,6 +5,8 @@ import torch
 from combat import Combat
 import pygad
 
+from world import World
+
 # generates a bunch of data of enemy player actions
 def generate_data(n: int, device: torch.device, progress_every=-1) -> List[Tuple[torch.Tensor, torch.Tensor]]:
     combat = Combat()
@@ -13,7 +15,7 @@ def generate_data(n: int, device: torch.device, progress_every=-1) -> List[Tuple
         if progress_every != -1:
             if i % progress_every == 0:
                 print(f"Generated {i} examples")
-        combat.battle_started(400, False, -1)
+        combat.battle_started(400, -1, None)
 
         choices = []
 
@@ -66,7 +68,7 @@ class NeuralPlayer:
         with torch.no_grad():
             response = self.model(torch.tensor(history[-20:]).float()).numpy()[0]
             choice = int(round(response))
-            print(response, choice)
+            #print(response, choice)
 
             if choice < 0.7:
                 choice = 0
@@ -74,6 +76,51 @@ class NeuralPlayer:
                 choice = 2
             
             return choice
+        
+    def make_combat_move(self, combat: Combat) -> Tuple[str, int]:
+        move = (self.predict(combat) + 1) % 3
+        if len(combat.history) % 6 == 0: # occasionally play a random move in long fights to prevent softlocks
+            return random.randint(0, 2)
+        else:
+            return move
+        
+    def make_map_move(self, location: int, combat: Combat, world: World):
+        cities = world.cities.cities
+
+        cities_enemy_health = [0] * len(cities)
+        for i in range(len(cities)):
+            if combat.has_encounter(location, i, world):
+                cities_enemy_health[i] = combat.calculate_enemy_health(location, i, world)
+
+        cities_without_hard_enemies = [i for i in range(len(cities)) if cities_enemy_health[i] < int(combat.player_max_health*1.1) and cities_enemy_health[i] > 0]
+
+        cities_with_connections = [i for i in range(len(cities)) if cities_enemy_health[i] == 0 and i != location]
+
+        cities_without_hard_enemies.sort(key=lambda x: cities_enemy_health[x])
+
+        for i in range(len(cities)):
+            print(f"{cities[i].name}: {cities_enemy_health[i]} {'X' if i in cities_without_hard_enemies else ' '} {'O' if i in cities_with_connections else ' '}")
+
+        if len(cities_without_hard_enemies) == 0:
+            if len(cities_with_connections) > 0:
+                choice = random.choice(cities_with_connections)
+                print(f"Moving on road due to lack of winnable fights.")
+                return choice
+            else:
+                print("Moving randomly due to lack of options.")
+                return random.randint(0, len(cities)-1)
+        else:
+            if random.randint(0, 1) == 0:
+                if len(cities_with_connections) > 0:
+                    print("Moving on road due to chance.")
+                    # travel on roads
+                    return random.choice(cities_with_connections)
+                else:
+                    print("Moving to fight due to lack of roads.")
+                    return random.choice(cities_without_hard_enemies)
+            else:
+                print("Fighting strongest enemy.")
+                return cities_without_hard_enemies[-1]
 
 
 if __name__ == "__main__":

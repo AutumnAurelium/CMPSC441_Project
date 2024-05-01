@@ -1,6 +1,8 @@
+import math
 import random
-from typing import List, Tuple
+from typing import Any, Callable, List, Tuple
 import numpy as np
+import pygad
 
 city_names = [
     "Morkomasto",
@@ -28,12 +30,20 @@ class Cities:
     routes: List[Tuple[int, int, Tuple[int, int, int]]]
     goal_city: int
 
-    def __init__(self, elevation: np.ndarray, num_cities=len(city_names), locations_to_check=32, num_routes=10):
+    def __init__(self, elevation: np.ndarray, num_routes=10):
+        fitness = lambda ga, solution, idx: self.game_fitness(
+            solution, idx, elevation, (640, 480)
+        )
+        ga_instance = self.setup_GA(fitness, 10, (640, 480))
+
+        ga_instance.run()
+
+        best_solution = ga_instance.best_solution()[0]
+        city_locs = self.solution_to_cities(best_solution, (640, 480))
+
         self.cities = []
-        for i in range(num_cities):
-            location = self.find_suitable_location(elevation, locations_to_check)
-            # theoretically we support having more cities than there are names, but there will be duplicates
-            self.cities.append(City(city_names[i % len(city_names)], location))
+        for i, city in enumerate(city_locs):
+            self.cities.append(City(city_names[i], city))
         
         self.routes = []
         for i in range(num_routes):
@@ -44,25 +54,80 @@ class Cities:
 
         self.goal_city = random.randint(1, len(self.cities)-1)
 
-    # this is a compromise in complexity between completely random city locations and the genetic algorithm
-    # we generate some number of possible locations and pick the best one
-    def find_suitable_location(self, world_elevation: np.ndarray, locations_to_check: int) -> Tuple[int, int]:
-        # generate a number of random locations
-        locations = [(np.random.randint(0, 640), np.random.randint(0, 480)) for _ in range(locations_to_check)]
+    def setup_GA(self, fitness: Any, n_cities: int, size: Tuple[int, int]) -> pygad.GA:
+        num_generations = 100
+        num_parents_mating = 10
+
+        solutions_per_population = 300
+        num_genes = n_cities
+
+        init_range_low = 0
+        init_range_high = size[0] * size[1]
+
+        parent_selection_type = "sss"
+        keep_parents = 10
+
+        crossover_type = "single_point"
+
+        mutation_type = "random"
+        mutation_percent_genes = 10
+
+        ga_instance = pygad.GA(
+            num_generations=num_generations,
+            num_parents_mating=num_parents_mating,
+            fitness_func=fitness,
+            sol_per_pop=solutions_per_population,
+            num_genes=num_genes,
+            gene_type=int,
+            init_range_low=init_range_low,
+            init_range_high=init_range_high,
+            parent_selection_type=parent_selection_type,
+            keep_parents=keep_parents,
+            crossover_type=crossover_type,
+            mutation_type=mutation_type,
+            mutation_percent_genes=mutation_percent_genes,
+        )
+
+        return ga_instance
+
+    def solution_to_cities(self, solution, size: Tuple[int, int]):
+        """
+        It takes a GA solution and size of the map, and returns the city coordinates
+        in the solution.
+
+        :param solution: a solution to GA
+        :param size: the size of the grid/map
+        :return: The cities are being returned as a list of lists.
+        """
+        cities = np.array(
+            list(map(lambda x: [int(x / size[0]), int(x % size[1])], solution))
+        )
+        return cities
+
+    def game_fitness(self, solution, idx, elevation, size):
+        fitness = 0.0001  # Do not return a fitness of 0, it will mess up the algorithm.
+        """
+        Create your fitness function here to fulfill the following criteria:
+        1. The cities should not be under water
+        2. The cities should have a realistic distribution across the landscape
+        3. The cities may also not be on top of mountains or on top of each other
+        """
+
+        city_coords = self.solution_to_cities(solution, size)
 
         fitness_scores = []
 
-        for location in locations:
+        for location in city_coords:
             fitness = 0
 
-            elevation = world_elevation[location[0], location[1]]
-            if elevation < 0.9: # don't put cities on mountaintops
+            cur_elev = elevation[location[0], location[1]]
+            if cur_elev < 0.9: # don't put cities on mountaintops
                 fitness += 100
-            if elevation > 0.3: # don't put cities underewater
+            if cur_elev > 0.3: # don't put cities underewater
                 fitness += 300
 
             # distance to all other cities
-            distance_to_others = [((location[0] - other.location[0]) ** 2 + (location[1] - other.location[1]) ** 2) ** 0.5 for other in self.cities]
+            distance_to_others = [((location[0] - other[0]) ** 2 + (location[1] - other[1]) ** 2) ** 0.5 for other in city_coords]
             closest_distance = 0
             if len(distance_to_others) >= 1:
                 closest_distance = min(distance_to_others)
@@ -70,17 +135,12 @@ class Cities:
                 closest_distance = 1000
 
             # disincentivize having cities too close together
-            fitness += (10000 / closest_distance)
+            fitness += (10000 / (closest_distance+0.1))
 
             # disincentivize having cities too close to the edge of the map
-            fitness += 1000 / max(min(location[0], 640 - location[0], location[1], 480 - location[1]), 1)
+            if location[0] < 10 or location[0] > size[0] - 10 or location[1] < 10 or location[1] > size[1] - 10:
+                fitness = 1
 
             fitness_scores.append(fitness)
-        
-        # get most fit location of the sampled ones
-        best_location = locations[np.argmin(fitness_scores)]
 
-        return best_location
-
-    def location_fitness(self, elevation: np.ndarray, location: Tuple[int, int]) -> float:
-        pass
+        return sum(fitness_scores)

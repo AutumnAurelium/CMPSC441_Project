@@ -11,6 +11,7 @@ class GameState:
     screen: str
     world: World
     location: int
+    money: int
 
     combat: Combat
 
@@ -18,6 +19,7 @@ class GameState:
         self.screen = "World"
         self.world = World()
         self.location = 0
+        self.money = 1000
         self.combat = Combat()
 
 class Game:
@@ -65,6 +67,10 @@ class Game:
     enable_neural_player: bool
     neural_player: NeuralPlayer
     neural_player_move_timer: int
+    neural_player_bypass_anim: bool
+    neural_player_cooldown: int
+
+    lost_money: bool
 
     def __init__(self):
         self.state = GameState()
@@ -139,6 +145,10 @@ class Game:
         self.enable_neural_player = False
         self.neural_player = NeuralPlayer()
         self.neural_player_move_timer = 0
+        self.neural_player_bypass_anim = True
+        self.neural_player_cooldown = 50
+
+        self.lost_money = True
 
         self.game_loop()
 
@@ -161,7 +171,6 @@ class Game:
                 if self.player_animation == "attack" and self.player_anim_timer > 120:
                     self.player_animation = "idle"
                     self.button_choice = -1
-                    self.state.combat.turn = "enemy"
                 
                 self.player_anim_timer += 1
 
@@ -191,20 +200,7 @@ class Game:
                         if ((city.location[0] - event.pos[0]) ** 2 + (city.location[1] - event.pos[1]) ** 2) ** 0.5 < 5:
                             # we clicked on a city
 
-                            if i == self.state.location:
-                                continue
-
-                            distance = ((city_manager.cities[i].location[0] - city_manager.cities[self.state.location].location[0]) ** 2 + (city_manager.cities[i].location[1] - city_manager.cities[self.state.location].location[1]) ** 2) ** 0.5
-
-                            if ((i, self.state.location) not in city_manager.routes and (self.state.location, i) not in city_manager.routes) or i == self.state.world.cities.goal_city:
-                                self.state.screen = "Combat"
-                                self.state.combat.battle_started(distance, self.state.world.cities.goal_city == i, i)
-
-                                self.sound_battle_start.play()
-                                pygame.mixer.music.play(-1)
-                            else:
-                                self.state.location = i
-                                self.state.combat.last_outcome = "none"
+                            self.move_to_location(i)
                 elif self.state.screen == "Combat":
                     if self.player_animation == "idle" and self.enemy_animation == "idle":
                         for i in range(3):
@@ -231,32 +227,53 @@ class Game:
         elif result == "draw":
             self.sound_draw.play()
 
+        self.handle_combat_outcome(result, i, enemy_move, battle_over)
+
+    def handle_combat_outcome(self, result: str, player_move: int, enemy_move: int, battle_over: bool):
+        combat = self.state.combat
+
+        if combat.heals_remaining < 0:
+            self.state.screen = "Failure"
+        
+        self.display_loot_text = False
+
         if battle_over:
             self.state.screen = "World"
             pygame.mixer.music.stop()
 
+            # player wins
             if self.state.combat.last_outcome == "win":
                 self.state.location = self.state.combat.destination
                 self.sound_battle_win.play()
+                self.state.money += self.state.combat.enemy_max_health / 2
+            # enemy wins
             elif self.state.combat.last_outcome == "loss":
                 self.sound_battle_lose.play()
 
-        if self.state.combat.enemy_health <= 0:
-            # player wins
-            self.state.screen = "World"
-            self.state.location = self.state.combat.destination
-            self.state.combat.player_max_health += 20 # add reward
-            self.sound_battle_win.play()
-            pygame.mixer.music.stop()
-        elif self.state.combat.player_health <= 0:
-            # we lose
-            self.state.screen = "World"
-            self.sound_battle_lose.play()
-            pygame.mixer.music.stop()
+    def move_to_location(self, location: int):
+        city_manager = self.state.world.cities
 
-        print(result)
-        print(self.state.combat.player_health, self.state.combat.enemy_health)
-        print()
+        self.lost_money = False
+
+        print(f"Moving to {city_manager.cities[location].name}")
+
+        if location == self.state.location:
+            return 
+
+        if self.state.combat.has_encounter(self.state.location, location, self.state.world):
+            self.state.screen = "Combat"
+            self.state.combat.battle_started(self.state.location, location, self.state.world)
+
+            self.sound_battle_start.play()
+            pygame.mixer.music.play(-1)
+        else:
+            cost = self.state.combat.calculate_enemy_health(self.state.location, location, self.state.world) / 2
+            self.state.money -= cost
+            if self.state.money < 0:
+                self.state.screen = "Failure"
+            self.lost_money = True
+            self.state.location = location
+            self.state.combat.last_outcome = "none"
 
     def game_update(self):
         if self.state.screen == "World":
@@ -266,13 +283,13 @@ class Game:
         if self.enable_neural_player:
             self.neural_player_move_timer += 1
 
-            if self.neural_player_move_timer > 150:
+            if self.neural_player_move_timer > self.neural_player_cooldown:
                 self.neural_player_move_timer = 0
-                if self.state.screen == "Combat" and self.player_animation == "idle" and self.enemy_animation == "idle":
-                    move = (self.neural_player.predict(self.state.combat) + 1) % 3
-
-                    self.handle_combat_input(move)
-
+                if self.state.screen == "Combat" and (self.player_animation == "idle" or self.neural_player_bypass_anim):
+                    self.handle_combat_input(self.neural_player.make_combat_move(self.state.combat))
+                elif self.state.screen == "World":
+                    self.move_to_location(self.neural_player.make_map_move(self.state.location, self.state.combat, self.state.world))
+                        
     def draw_text(self, text: str, x: int, y: int, font_size=20, color=(255, 255, 255), center=False):
         text_surface = pygame.font.SysFont(None, font_size).render(text, True, color)
         text_rect = text_surface.get_rect()
@@ -295,6 +312,12 @@ class Game:
             self.draw_text(f"With your final enemy defeated, you proceed to {self.state.world.cities.cities[self.state.location].name}.", 320, 360, center=True)
             self.draw_text("As you enter the city, you are showered with gifts and praise for defeating the brute terrorizing it.", 320, 400, center=True)
             self.draw_text("Content with having saved the day, you prepare for your next adventure...", 320, 440, center=True)
+        elif self.state.screen == "Failure":
+            self.draw_text("You lose!", 320, 320, center=True, font_size=50)
+            if self.state.money < 0:
+                self.draw_text("You have run out of money and are unable to continue your journey...", 320, 360, center=True)
+            else:
+                self.draw_text("You have been defeated...", 320, 360, center=True)
 
         self.draw_ui()
 
@@ -401,9 +424,16 @@ class Game:
             self.draw_text("Travelling", 20, 500, font_size=30)
             self.draw_text(f"Objective: Get to {city_manager.cities[city_manager.goal_city].name}", 20, 520)
             if self.state.combat.last_outcome == "win":
-                self.draw_text(f"Victory! You defeated the enemy and gained 20 health, proceeding to {self.state.world.cities.cities[self.state.location].name}", 20, 540)
+                self.draw_text(f"Victory! You defeated the enemy and grew stronger, proceeding to {self.state.world.cities.cities[self.state.location].name}", 20, 540)
+                self.draw_text(f"You looted money from the enemy. You now have {self.state.money} gold.", 20, 560)
+                if self.state.combat.added_heal:
+                    self.draw_text("You managed to loot healing supplies from the enemy.", 20, 580)
             elif self.state.combat.last_outcome == "loss":
                 self.draw_text(f"Defeat! You barely managed to escape back to {self.state.world.cities.cities[self.state.location].name}...", 20, 540)
+                self.draw_text(f"You have {self.state.combat.heals_remaining} heals remaining.", 20, 560)
+            elif self.lost_money:
+                self.draw_text(f"You paid {self.state.combat.calculate_enemy_health(self.state.location, self.state.combat.destination, self.state.world) / 2} gold to travel to {city_manager.cities[self.state.location].name}.", 20, 540)
+                self.draw_text(f"You now have {self.state.money} gold remaining.", 20, 560)
         elif self.state.screen == "Combat":
             if self.state.combat.is_boss:
                 self.draw_text("Final Encounter!", 20, 500, font_size=30)
@@ -411,20 +441,20 @@ class Game:
             else:
                 self.draw_text("Combat!", 20, 500, font_size=30)
                 self.draw_text("As you trekked through the wilderness, you were attacked!", 20, 520)
-            
-            if self.enable_neural_player:
-                self.draw_text("AI is enabled! Press N to disable", 20, 560)
 
             latest = self.state.combat.history[-1] if len(self.state.combat.history) > 0 else (None, None, None)
 
             if latest[2] == "win":
-                self.draw_text(f"Your ATTACK {latest[0]+1} breaks through the enemy's ATTACK {latest[1]+1}, causing 20 damage!", 20, 540)
+                self.draw_text(f"Your ATTACK {latest[0]+1} breaks through the enemy's ATTACK {latest[1]+1}!", 20, 540)
             elif latest[2] == "loss":
-                self.draw_text(f"The enemy's ATTACK {latest[1]+1} breaks through your ATTACK {latest[0]+1}, causing 20 damage!", 20, 540)
+                self.draw_text(f"The enemy's ATTACK {latest[1]+1} breaks through your ATTACK {latest[0]+1}!", 20, 540)
             elif latest[2] == "draw":
                 self.draw_text(f"Both of your ATTACK {latest[1]+1}s clash together, dealing no damage!", 20, 540)
             else:
                 self.draw_text("Choose your attack!", 20, 540)
+        
+        if self.enable_neural_player:
+                self.draw_text("AI is enabled! Press N to disable", 20, 600)
 
 if __name__ == "__main__":
     game = Game()
