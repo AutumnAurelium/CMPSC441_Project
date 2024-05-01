@@ -4,6 +4,8 @@ I rewrote a lot of the code to make the final game more fun and the code more we
 
 I really overhauled a lot of the game's functionality while sticking to the requirements. Sorry if this makes grading harder.
 
+Please run `pip install -r requirements.txt` to install all necessary dependencies.
+
 ## Abstract
 
 This project is an example of a game that poses a moderate challenge to both human players and AI agents. It can be played fully autonomously, or manually by the player.

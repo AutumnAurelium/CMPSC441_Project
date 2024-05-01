@@ -53,7 +53,7 @@ class NeuralPlayerModel(torch.nn.Module):
 class NeuralPlayer:
     def __init__(self):
         self.model = NeuralPlayerModel()
-        self.model.load_state_dict(torch.load("neural_player.pth"))
+        self.model.load_state_dict(torch.load("neural_player.pth", map_location=torch.device('cpu')))
         self.model.eval()
     
     def predict(self, combat: Combat) -> int:
